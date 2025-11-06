@@ -177,11 +177,7 @@ class TopKRouter(Router):
                 ),
                 persistent=False,
             )
-            self.register_buffer(
-                'ga_steps',
-                torch.tensor(0, dtype=torch.float32, device=torch.cuda.current_device()),
-                persistent=False,
-            )
+            self.ga_steps = 0
         else:
             self.global_tokens_per_expert = None
             self.ga_steps = None
@@ -539,7 +535,7 @@ class TopKRouter(Router):
         """Reset the global aux loss tracker."""
         if self.global_tokens_per_expert is not None:
             self.global_tokens_per_expert.zero_()
-            self.ga_steps.zero_()
+            self.ga_steps = 0
 
     def forward(self, input: torch.Tensor):
         """

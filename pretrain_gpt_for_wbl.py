@@ -339,6 +339,7 @@ def forward_step(data_iterator, model: GPTModel, return_schedule_plan: bool = Fa
     timers('batch-generator').stop()
 
     with stimer:
+        # torch.cuda.synchronize()    # DEBUG
         if args.use_legacy_models:
             output_tensor = model(tokens, position_ids, attention_mask, labels=labels)
         else:
