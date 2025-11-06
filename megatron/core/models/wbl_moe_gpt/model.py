@@ -6,25 +6,12 @@ import torch
 from torch import Tensor
 from megatron.core import parallel_state, tensor_parallel
 from megatron.core.fusions.fused_bias_dropout import get_bias_dropout_add
-from megatron.core.models.backends import BackendSpecProvider, LocalSpecProvider
-from megatron.core.models.gpt.moe_module_specs import get_moe_module_spec_for_backend
+from megatron.core.models.backends import BackendSpecProvider
 from megatron.core.models.gpt.gpt_layer_specs import get_mlp_module_spec_for_backend
 from megatron.core.transformer.attention import SelfAttention, SelfAttentionSubmodules
 from megatron.core.transformer.enums import AttnMaskType, LayerType
 from megatron.core.transformer.identity_op import IdentityOp
-from megatron.core.transformer.mlp import MLP, MLPSubmodules
-from megatron.core.transformer.moe.shared_experts import SharedExpertMLP
-from megatron.core.transformer.moe.moe_layer import MoELayer, MoESubmodules
-from megatron.core.transformer.multi_latent_attention import (
-    MLASelfAttention,
-    MLASelfAttentionSubmodules,
-)
-from megatron.core.transformer.multi_token_prediction import (
-    MultiTokenPredictionBlockSubmodules,
-    get_mtp_layer_offset,
-    get_mtp_layer_spec_for_backend,
-    get_mtp_num_layers_to_build,
-)
+from megatron.core.transformer.multi_latent_attention import MLASelfAttentionSubmodules
 from megatron.core.transformer.spec_utils import ModuleSpec, build_module
 from megatron.core.transformer.torch_norm import L2Norm
 from megatron.core.transformer.transformer_block import (
@@ -33,7 +20,6 @@ from megatron.core.transformer.transformer_block import (
 )
 from megatron.core.transformer.transformer_config import TransformerConfig
 from megatron.core.transformer.transformer_layer import (
-    TransformerLayer,
     TransformerLayerSubmodules,
     get_transformer_layer_offset,
 )
@@ -41,7 +27,6 @@ from megatron.core.transformer.multi_latent_attention import MultiLatentAttentio
 from megatron.core.models.common.embeddings import (
     RotaryEmbedding,
     YarnRotaryEmbedding,
-    _yarn_get_mscale,
     apply_rotary_pos_emb,
 )
 from megatron.core.process_groups_config import ModelCommProcessGroups
@@ -51,11 +36,11 @@ from megatron.core.tensor_parallel.mappings import (
     gather_from_tensor_model_parallel_region,
     scatter_to_sequence_parallel_region,
 )
-from megatron.core.transformer.attention import Attention
 from megatron.core.transformer.enums import AttnMaskType
 from megatron.core.transformer.spec_utils import ModuleSpec, build_module
 from megatron.core.transformer.transformer_config import MLATransformerConfig
 from megatron.core.utils import deprecate_inference_params
+from megatron.core.models.wbl_moe_gpt.transformer_layer import TransformerLayer
 
 try:
     from megatron.core.fusions.fused_mla_yarn_rope_apply import (
@@ -79,7 +64,7 @@ except ImportError:
 try:
     import transformer_engine as te  # pylint: disable=unused-import
 
-    from megatron.core.extensions.transformer_engine import TEFusedMLP, TENorm, TERowParallelLinear
+    from megatron.core.extensions.transformer_engine import TENorm
     from megatron.core.extensions.transformer_engine_spec_provider import TESpecProvider
 
     HAVE_TE = True
