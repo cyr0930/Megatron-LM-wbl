@@ -267,7 +267,7 @@ class ModelParallelConfig:
        overlap_p2p_comm is True.
     """
 
-    batch_p2p_sync: bool = True
+    batch_p2p_sync: bool = False
     """When using batch_isend_irecv, do a cuda.device.synchronize afterward to work around a bug in
        older version of PyTorch.
     """
