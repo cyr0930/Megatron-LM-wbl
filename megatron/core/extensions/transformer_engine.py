@@ -218,16 +218,17 @@ class TELinear(te.pytorch.Linear):
         input_size: int,
         output_size: int,
         *,
-        parallel_mode: Optional[str],
         config: ModelParallelConfig,
         init_method: Callable,
         bias: bool,
         skip_bias_add: bool,
-        skip_weight_param_allocation: bool,
         tp_comm_buffer_name: Optional[str] = None,
         is_expert: bool = False,
         symmetric_ar_type: Optional[str] = None,
+        skip_weight_param_allocation: bool = False,
         tp_group: Optional[torch.distributed.ProcessGroup] = None,
+        parallel_mode: str = "duplicated",
+        **kwargs,
     ):
         if not HAVE_TE:
             raise ImportError(
@@ -312,7 +313,7 @@ class TELinear(te.pytorch.Linear):
             ), "Must have at least TE version 2.3 or higher to use symmetric memory all reduce"
             extra_kwargs["symmetric_ar_type"] = symmetric_ar_type
         if parallel_mode == "duplicated":
-            assert tp_group is None, "duplicated linear should not have tp_group set"
+            tp_group = None
             tp_size = 1
         else:
             tp_size = get_pg_size(tp_group)

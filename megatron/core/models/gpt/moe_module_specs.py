@@ -46,8 +46,9 @@ def get_moe_module_spec_for_backend(
     """Helper function to get module spec for MoE"""
     assert num_experts is not None
 
-    linear_fc1 = backend.column_parallel_linear()
-    linear_fc2 = backend.row_parallel_linear()
+    from megatron.core.extensions.transformer_engine import TELinear
+    linear_fc1 = TELinear
+    linear_fc2 = TELinear
 
     mlp = MLPSubmodules(linear_fc1=linear_fc1, linear_fc2=linear_fc2)
 
