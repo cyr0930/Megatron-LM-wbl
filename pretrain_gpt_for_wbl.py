@@ -251,6 +251,15 @@ def get_batch(data_iterator):
     # slice batch along sequence dimension for context parallelism
     batch = get_batch_on_this_cp_rank(batch)
 
+    if batch["attention_mask"] is None:
+        import os
+        local_rank = os.getenv("LOCAL_RANK")
+        seq_length = batch["labels"].shape[1] if batch["tokens"] is None else batch["tokens"].shape[1]
+        attention_mask = torch.tril(
+            torch.ones((seq_length, seq_length), device=f"cuda:{local_rank}")
+        ).unsqueeze(0)
+        batch["attention_mask"] = attention_mask < 0.5
+
     return batch.values()
 
 

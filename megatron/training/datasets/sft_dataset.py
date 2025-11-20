@@ -27,20 +27,49 @@ class SFTLowLevelDataset:
             ]
     """
 
-    def __init__(self, dataset_path: str) -> None:
+    def __init__(self, dataset_path: str = None, dataset=None) -> None:
         try:
-            from datasets import load_dataset
+            from datasets import load_dataset, load_from_disk
         except ImportError:
             raise ImportError(
                 "SFTDataset currently requires datasets library to be installed"
             )
-        self.dataset = load_dataset("json", data_files=dataset_path, split="all")
+        
+        if dataset is not None:
+            # 이미 로드된 데이터셋을 사용하는 경우
+            self.dataset = dataset
+        elif dataset_path is not None:
+            # 기존 방식: 파일 경로에서 로드
+            self.dataset = load_dataset("json", data_files=dataset_path, split="train")
+        else:
+            raise ValueError("Either dataset_path or dataset must be provided")
 
     def __len__(self) -> int:
         return len(self.dataset)
 
     def __getitem__(self, idx: int) -> list:
-        return self.dataset[idx]["messages"]
+        import ast
+        
+        item = self.dataset[idx]
+        
+        # stage 구분 추가
+        if 'tools' in item:
+            if item['stage'] == "1":
+                pass
+            elif item['stage'] == "2":
+                tools_value = item['tools']
+                if isinstance(tools_value, str) and tools_value != "":
+                    item['tools'] = ast.literal_eval(tools_value)
+        
+        if 'query_and_response' in item:
+            qr_value = item['query_and_response']
+            if item['stage'] == "1":
+                pass
+            elif item['stage'] == "2":
+                if isinstance(qr_value, str) and qr_value != "":
+                    item['query_and_response'] = ast.literal_eval(qr_value)
+        
+        return item
 
 
 class SFTDataset(MegatronDataset):
@@ -74,9 +103,21 @@ class SFTDataset(MegatronDataset):
         max_seq_len = self.config.sequence_length
 
         conversation_list = self.dataset[int(self.indices[idx % len(self.indices)])]
-        tokens, target = tokenizer.tokenize_conversation(
-            conversation_list, return_target=True, add_generation_prompt=False
-        )
+        if conversation_list["stage"] == "1":
+            tokens, target = tokenizer.tokenize_conversation_for_stage_1(
+                conversation_list["query_and_response"]
+            )
+            
+        elif conversation_list["stage"] == "2":
+            # tool_call 데이터 처리를 위함
+            if conversation_list["도메인_대분류"] == "8":
+                tokens, target = tokenizer.tokenize_conversation(
+                    conversation_list["query_and_response"], return_target=True, add_generation_prompt=False, tools=conversation_list["tools"]
+                )
+            else:
+                tokens, target = tokenizer.tokenize_conversation(
+                    conversation_list["query_and_response"], return_target=True, add_generation_prompt=False
+                )
 
         # minus one to insert eos token
         if len(tokens) > max_seq_len - 1:
@@ -87,14 +128,16 @@ class SFTDataset(MegatronDataset):
                 tokens = tokens[-(max_seq_len - 1) :]
                 target = target[-(max_seq_len - 1) :]
 
+        total_len = len(target) # 마지막 eos까지의 길이
+
         # padding
         num_tokens = len(tokens) + 1
         padding_len = max_seq_len - num_tokens
         assert padding_len >= 0
         filler = [tokenizer.pad] * (padding_len + 1)
 
-        tokens = np.array(tokens.tolist() + [tokenizer.eod] + filler, dtype=np.int64)
-        target = np.array(target.tolist() + [tokenizer.eod] + filler, dtype=np.int64)
+        tokens = tokens.tolist() + [tokenizer.eod] + filler
+        target = target.tolist() + [tokenizer.eod] + filler
 
         tokens = torch.tensor(tokens)
         target = torch.tensor(target)
@@ -102,29 +145,21 @@ class SFTDataset(MegatronDataset):
         tokens = tokens[:-1].contiguous()
         target = target[1:].contiguous()
 
-        loss_mask, position_ids, attention_mask = self._get_ltor_masks_and_position_ids(
-            max_seq_len, target, tokenizer.pad
+        # TODO: mask template parts
+        loss_mask, position_ids = self._get_ltor_masks_and_position_ids(
+            max_seq_len, target, tokenizer.pad, conversation_list['stage'], total_len
         )
 
-        if self.config.create_attention_mask:
-            ret = {
-                'tokens': tokens,
-                'labels': target,
-                'attention_mask': attention_mask,
-                'loss_mask': loss_mask,
-                'position_ids': position_ids,
-            }
-        else:
-            ret = {
-                'tokens': tokens,
-                'labels': target,
-                'loss_mask': loss_mask,
-                'position_ids': position_ids,
-            }
+        ret = {
+            'tokens': tokens,
+            'labels': target,
+            'loss_mask': loss_mask,
+            'position_ids': position_ids,
+        }
 
         return ret
 
-    def _get_ltor_masks_and_position_ids(self, max_seq_len, target, pad_token):
+    def _get_ltor_masks_and_position_ids(self, max_seq_len, target, pad_token, stage, total_len):
         """Build masks and position id for left to right model for SFT"""
 
         assert not self.config.reset_position_ids and not self.config.reset_attention_mask
@@ -134,16 +169,20 @@ class SFTDataset(MegatronDataset):
 
         # Loss mask.
         loss_mask = torch.ones(max_seq_len, dtype=torch.float)
-        loss_mask[target == pad_token] = 0.0  # mask paddings
-        loss_mask[target == IGNORE_INDEX] = 0.0  # mask prompts
 
-        if self.config.create_attention_mask:
-            attention_mask = torch.tril(
-                torch.ones((seq_length, seq_length), device=data.device)
-            ).unsqueeze(0)
-            # Convert attention mask to binary:
-            attention_mask = attention_mask < 0.5
-        else:
-            attention_mask = None
+        if stage == "1":
+            loss_mask[total_len-1:] = 0.0
 
-        return loss_mask, position_ids, attention_mask
+        elif stage == "2":
+            # 첫 번째 EOS는 진짜 문장 끝이므로 loss 계산
+            # 그 이후의 PAD(=EOS)는 마스킹
+            eos_positions = (target == pad_token).nonzero(as_tuple=True)[0]
+            if len(eos_positions) > 0:
+                first_eos = eos_positions[0].item()
+                # 첫 번째 EOS까지는 loss 계산 (loss_mask = 1.0 유지)
+                # 첫 번째 EOS 이후는 마스킹
+                loss_mask[first_eos + 1:] = 0.0
+
+        # loss_mask[target == IGNORE_INDEX] = 0.0  # mask prompts
+
+        return loss_mask, position_ids

@@ -10,6 +10,11 @@ from megatron.core.datasets.megatron_tokenizer import MegatronTokenizer
 from megatron.training.datasets.sft_dataset import IGNORE_INDEX
 from megatron.training.tokenizer.multimodal_tokenizer import PromptConfig
 
+def load_template(path: str) -> str:
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read()
+
+
 class SFTTokenizer(MegatronTokenizer):  
     """SFT Tokenizer."""
 
@@ -49,14 +54,33 @@ class SFTTokenizer(MegatronTokenizer):
                 has_bos=False,
                 has_system_role=True,
             )
+        elif prompt_format == "wbl":
+            self._prompt_config = PromptConfig(
+                assistant_prefix_len=6,
+                pad_token_id=tokenizer.convert_tokens_to_ids("<|END|>"),    # TODO: init <|END|> with </s>?
+                custom_chat_template=load_template(f"{tokenizer_path}/chat_template.jinja"),
+                has_bos=False,
+                has_system_role=True,
+            )
         else:
             raise NotImplementedError("unknown SFT prompt format", prompt_format)
 
         self._prompt_format = prompt_format
 
+    def tokenize_conversation_for_stage_1(
+        self, serialized_conversations
+    ):
+        whole_tokens = self._tokenizer(
+            serialized_conversations,
+            return_tensors="np",
+            return_token_type_ids=False,
+            return_attention_mask=False,
+        )["input_ids"][0]
+        return whole_tokens, whole_tokens
+
 
     def tokenize_conversation(
-        self, conversation: List[Dict], return_target: bool, add_generation_prompt: bool
+        self, conversation: List[Dict], return_target: bool, add_generation_prompt: bool, tools=None
     ):
         """Convert a conversation to tokens.
 
@@ -75,57 +99,33 @@ class SFTTokenizer(MegatronTokenizer):
         if not self._prompt_config.has_system_role and conversation[0]["role"] == "system":
             conversation = conversation[1:]
 
-        tokens = self._tokenizer.apply_chat_template(
+        whole_tokens = self._tokenizer.apply_chat_template(
             conversation,
             tokenize=True,
-            add_generation_prompt=add_generation_prompt,
+            add_generation_prompt=False,
             return_assistant_token_mask=False,
             return_tensors="np",
             chat_template=self._prompt_config.custom_chat_template,
+            tools=tools
         )[0]
+        if conversation[-1]["role"] == "assistant":
+            non_target_conversation = conversation[:-1]
+            non_target_tokens = self._tokenizer.apply_chat_template(
+                non_target_conversation,
+                tokenize=True,
+                add_generation_prompt=True,
+                return_assistant_token_mask=False,
+                return_tensors="np",
+                chat_template=self._prompt_config.custom_chat_template,
+                tools=tools
+            )[0]
+            non_target_len = len(non_target_tokens)
+            target_tokens = np.full_like(whole_tokens, fill_value=IGNORE_INDEX)
+            target_tokens[non_target_len:] = whole_tokens[non_target_len:]
+        else:
+            raise NotImplementedError("Data is not ended with assistant or tool role.")
 
-        if not return_target:
-            return tokens
-
-        target = tokens.copy()
-
-        # Mask system and user tokens in the target.
-        idx = 0
-        for turn_idx, turn in enumerate(conversation):
-            
-            if turn["role"].lower() == "assistant" and len(turn["content"]) == 0:
-                raise ValueError(f"empty assistant turn in conversation: {conversation}.")
-            if turn["role"].lower() == "assistant":
-                assert conversation[turn_idx-1]["role"].lower() == "user"
-
-            turn_tokens = self._tokenizer.apply_chat_template(
-                [turn], tokenize=True, chat_template=self._prompt_config.custom_chat_template
-            )
-
-            # There should be only one BOS at the very beginning.
-            # After the first turn, skip BOS token.
-            if self._prompt_config.has_bos and turn_idx > 0:
-                turn_tokens = turn_tokens[1:]
-            turn_len = len(turn_tokens)
-
-            role = turn["role"].lower()
-            if role in ("system", "user"):
-                target[idx : idx + turn_len] = IGNORE_INDEX
-            elif role == "assistant":
-                if self._prompt_config.assistant_prefix_len > 0:
-                    target[idx : idx + self._prompt_config.assistant_prefix_len] = IGNORE_INDEX
-            else:
-                raise ValueError(f"Wrong role value.")
-
-            assert np.allclose(
-                tokens[idx : idx + turn_len], turn_tokens
-            ), f"expected turn tokens to match tokens in conversation {conversation}"
-
-            idx += turn_len
-        
-        assert idx == len(tokens), f"mismatch in target masking the conversation {conversation}"
-
-        return tokens, target
+        return whole_tokens, target_tokens
 
     def tokenize(self, text: Union[str, List[Dict]]):
         """Tokenize conversation or string input."""
