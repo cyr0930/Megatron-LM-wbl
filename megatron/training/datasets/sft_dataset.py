@@ -29,7 +29,7 @@ class SFTLowLevelDataset:
 
     def __init__(self, dataset_path: str = None, dataset=None) -> None:
         try:
-            from datasets import load_dataset, load_from_disk
+            from datasets import load_from_disk
         except ImportError:
             raise ImportError(
                 "SFTDataset currently requires datasets library to be installed"
@@ -38,7 +38,9 @@ class SFTLowLevelDataset:
         if dataset is not None:
             self.dataset = dataset
         elif dataset_path is not None:
-            self.dataset = load_dataset("json", data_files=dataset_path, split="train")
+            if dataset_path.endswith(".jsonl"):
+                dataset_path = self._jsonl_to_arrow(dataset_path)
+            self.dataset = load_from_disk(dataset_path)
         else:
             raise ValueError("Either dataset_path or dataset must be provided")
 
@@ -67,6 +69,30 @@ class SFTLowLevelDataset:
                     item['query_and_response'] = ast.literal_eval(qr_value)
         
         return item
+    
+    def _jsonl_to_arrow(self, dataset_path):
+        import os
+        import time
+        output_path = dataset_path.replace(".jsonl", "_arrow")
+        if os.path.exists(output_path):
+            return output_path
+        
+        global_rank = int(os.getenv("RANK"))
+        if global_rank != 0:
+            while True:
+                time.sleep(5)
+                if os.path.exists(output_path):
+                    return output_path
+
+        import shutil
+        from datasets import load_dataset
+        print("Read dataset from jsonl:", dataset_path)
+        dataset = load_dataset("json", data_files=dataset_path, split="train")
+
+        output_path_tmp = output_path + "_tmp"
+        dataset.save_to_disk(output_path_tmp)
+        shutil.move(output_path_tmp, output_path)
+        return output_path
 
 
 class SFTDataset(MegatronDataset):
