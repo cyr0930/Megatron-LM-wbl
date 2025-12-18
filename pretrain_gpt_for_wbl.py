@@ -233,6 +233,11 @@ def model_provider_with_args(
 
         print_module_params(model, print_rank_0)
 
+    if args.freeze_router:
+        for layer in model.decoder.layers:
+            if hasattr(layer.mlp, "router"):
+                layer.mlp.router.weight.require_grad = False
+
     return model
 
 
