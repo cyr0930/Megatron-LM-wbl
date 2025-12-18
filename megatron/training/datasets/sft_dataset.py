@@ -126,12 +126,13 @@ class SFTDataset(MegatronDataset):
         max_seq_len = self.config.sequence_length
 
         conversation_list = self.dataset[int(self.indices[idx % len(self.indices)])]
-        if conversation_list["stage"] == "1":
+        stage = conversation_list['stage']
+        if stage == "1":
             tokens, target = tokenizer.tokenize_conversation_for_stage_1(
                 conversation_list["query_and_response"]
             )
             
-        elif conversation_list["stage"] == "2":
+        elif stage == "2":
             if conversation_list["도메인_대분류"] == "8":
                 tokens, target = tokenizer.tokenize_conversation(
                     conversation_list["query_and_response"], return_target=True, add_generation_prompt=False, tools=conversation_list["tools"]
@@ -143,68 +144,78 @@ class SFTDataset(MegatronDataset):
 
         # minus one to insert eos token
         if len(tokens) > max_seq_len - 1:
-            if True:  # TODO: when too long to fit in context, truncate left to right
-                tokens = tokens[: max_seq_len - 1]
-                target = target[: max_seq_len - 1]
-            else:  # right to left
-                tokens = tokens[-(max_seq_len - 1) :]
-                target = target[-(max_seq_len - 1) :]
+            # if True:  # TODO: when too long to fit in context, truncate left to right
+            #     tokens = tokens[: max_seq_len - 1]
+            #     target = target[: max_seq_len - 1]
+            # else:  # right to left
+            tokens = tokens[-(max_seq_len - 1) :]
+            target = target[-(max_seq_len - 1) :]
+        tokens = tokens.tolist()
+        target = target.tolist()
 
-        total_len = len(target) # 마지막 eos까지의 길이
+        start_id = tokenizer._tokenizer.vocab["<|START|>"]
+        unk_id = tokenizer._tokenizer.vocab["<unk>"]
+        role_start_id = tokenizer._tokenizer.vocab["<|role_start|>"]
+        role_end_id = tokenizer._tokenizer.vocab["<|role_end|>"]
+        think_start_id = tokenizer._tokenizer.vocab["<think>"]
+        think_end_id = tokenizer._tokenizer.vocab["</think>"]
+        nl_id = tokenizer._tokenizer.vocab["\n"]
+        nlnl_id = tokenizer._tokenizer.vocab["\n\n"]
+        system_id = tokenizer._tokenizer.encode("system")[0]
+        user_id = tokenizer._tokenizer.encode("user")[0]
+        assistant_id = tokenizer._tokenizer.encode("assistant")[0]
+
+        loss_mask = []
+        role_end, nl_check, keep_mask = True, False, False
+        for token_id in target:
+            if token_id in [unk_id, start_id, IGNORE_INDEX]:
+                loss_mask.append(0.0)
+            elif token_id == role_start_id:
+                loss_mask.append(0.0)
+                role_end = False
+            elif token_id == role_end_id:
+                loss_mask.append(0.0)
+                role_end = True
+                nl_check = True
+            elif token_id == think_start_id:
+                loss_mask.append(0.0)
+                nl_check = True
+            elif token_id == think_end_id:
+                loss_mask.append(1.0)
+                nl_check = True
+            elif nl_check and token_id in [nl_id, nlnl_id]:
+                loss_mask.append(0.0)
+                nl_check = False
+            elif not role_end:
+                loss_mask.append(0.0)
+                if token_id in [system_id, user_id]:
+                    keep_mask = True
+                elif token_id == assistant_id:
+                    keep_mask = False
+            elif keep_mask:
+                loss_mask.append(0.0)
+            else:
+                loss_mask.append(1.0)
 
         # padding
         num_tokens = len(tokens) + 1
         padding_len = max_seq_len - num_tokens
         assert padding_len >= 0
+        tokens.append(tokenizer.eod)
+        target.append(tokenizer.eod)
+        loss_mask.append(0.0)
         filler = [tokenizer.pad] * (padding_len + 1)
-
-        tokens = tokens.tolist() + [tokenizer.eod] + filler
-        target = target.tolist() + [tokenizer.eod] + filler
-
-        tokens = torch.tensor(tokens)
-        target = torch.tensor(target)
-
-        tokens = tokens[:-1].contiguous()
-        target = target[1:].contiguous()
-
-        # TODO: mask template parts
-        loss_mask, position_ids = self._get_ltor_masks_and_position_ids(
-            max_seq_len, target, tokenizer.pad, conversation_list['stage'], total_len
-        )
+        tokens.extend(filler)
+        target.extend(filler)
+        loss_mask.extend([0.0] * len(filler))
+        tokens = tokens[:-1]
+        target = target[1:]
+        loss_mask = loss_mask[1:]
 
         ret = {
-            'tokens': tokens,
-            'labels': target,
-            'loss_mask': loss_mask,
-            'position_ids': position_ids,
+            'tokens': torch.tensor(tokens).contiguous(),
+            'labels': torch.tensor(target).contiguous(),
+            'loss_mask': torch.tensor(loss_mask),
+            'position_ids': torch.arange(max_seq_len, dtype=torch.long),
         }
-
         return ret
-
-    def _get_ltor_masks_and_position_ids(self, max_seq_len, target, pad_token, stage, total_len):
-        """Build masks and position id for left to right model for SFT"""
-
-        assert not self.config.reset_position_ids and not self.config.reset_attention_mask
-
-        # Position ids.
-        position_ids = torch.arange(max_seq_len, dtype=torch.long)
-
-        # Loss mask.
-        loss_mask = torch.ones(max_seq_len, dtype=torch.float)
-
-        if stage == "1":
-            loss_mask[total_len-1:] = 0.0
-
-        elif stage == "2":
-            # 첫 번째 EOS는 진짜 문장 끝이므로 loss 계산
-            # 그 이후의 PAD(=EOS)는 마스킹
-            eos_positions = (target == pad_token).nonzero(as_tuple=True)[0]
-            if len(eos_positions) > 0:
-                first_eos = eos_positions[0].item()
-                # 첫 번째 EOS까지는 loss 계산 (loss_mask = 1.0 유지)
-                # 첫 번째 EOS 이후는 마스킹
-                loss_mask[first_eos + 1:] = 0.0
-
-        # loss_mask[target == IGNORE_INDEX] = 0.0  # mask prompts
-
-        return loss_mask, position_ids

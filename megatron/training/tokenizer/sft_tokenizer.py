@@ -57,7 +57,7 @@ class SFTTokenizer(MegatronTokenizer):
         elif prompt_format == "wbl":
             self._prompt_config = PromptConfig(
                 assistant_prefix_len=6,
-                pad_token_id=tokenizer.convert_tokens_to_ids("<|END|>"),    # TODO: init <|END|> with </s>?
+                pad_token_id=tokenizer.convert_tokens_to_ids("<|END|>"),
                 custom_chat_template=load_template(f"{tokenizer_path}/chat_template.jinja"),
                 has_bos=False,
                 has_system_role=True,
