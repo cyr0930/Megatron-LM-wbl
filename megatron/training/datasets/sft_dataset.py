@@ -36,10 +36,8 @@ class SFTLowLevelDataset:
             )
         
         if dataset is not None:
-            # 이미 로드된 데이터셋을 사용하는 경우
             self.dataset = dataset
         elif dataset_path is not None:
-            # 기존 방식: 파일 경로에서 로드
             self.dataset = load_dataset("json", data_files=dataset_path, split="train")
         else:
             raise ValueError("Either dataset_path or dataset must be provided")
@@ -52,7 +50,6 @@ class SFTLowLevelDataset:
         
         item = self.dataset[idx]
         
-        # stage 구분 추가
         if 'tools' in item:
             if item['stage'] == "1":
                 pass
@@ -109,7 +106,6 @@ class SFTDataset(MegatronDataset):
             )
             
         elif conversation_list["stage"] == "2":
-            # tool_call 데이터 처리를 위함
             if conversation_list["도메인_대분류"] == "8":
                 tokens, target = tokenizer.tokenize_conversation(
                     conversation_list["query_and_response"], return_target=True, add_generation_prompt=False, tools=conversation_list["tools"]
