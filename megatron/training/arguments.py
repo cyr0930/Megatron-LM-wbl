@@ -1537,7 +1537,7 @@ def _add_network_size_args(parser):
                        help="set sliding window interleaving with (k-1):1 ratio.") 
     group.add_argument('--sliding-window-size', type=int, default=None,
                        help="set local sliding window size. recommends 512 tokens.")
-    group.add_argument('--freeze-router', type=bool, default=False)
+    group.add_argument('--freeze-router', action='store_true')
 
     return parser
 
