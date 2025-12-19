@@ -108,6 +108,19 @@ class SFTDataset(MegatronDataset):
         config: GPTDatasetConfig,
     ) -> None:
         super().__init__(dataset, dataset_path, indices, num_samples, index_split, config)
+        tokenizer = self.config.tokenizer
+        self.start_id = tokenizer._tokenizer.vocab["<|START|>"]
+        self.end_id = tokenizer._tokenizer.vocab["<|END|>"]
+        self.unk_id = tokenizer._tokenizer.vocab["<unk>"]
+        self.role_start_id = tokenizer._tokenizer.vocab["<|role_start|>"]
+        self.role_end_id = tokenizer._tokenizer.vocab["<|role_end|>"]
+        self.think_start_id = tokenizer._tokenizer.vocab["<think>"]
+        self.think_end_id = tokenizer._tokenizer.vocab["</think>"]
+        self.nl_id = tokenizer._tokenizer.vocab["\n"]
+        self.nlnl_id = tokenizer._tokenizer.vocab["\n\n"]
+        self.system_id = tokenizer._tokenizer.encode("system")[0]
+        self.user_id = tokenizer._tokenizer.encode("user")[0]
+        self.assistant_id = tokenizer._tokenizer.encode("assistant")[0]
 
     @staticmethod
     def numel_low_level_dataset(low_level_dataset: LowLevelDataset) -> int:
@@ -153,49 +166,42 @@ class SFTDataset(MegatronDataset):
         tokens = tokens.tolist()
         target = target.tolist()
 
-        start_id = tokenizer._tokenizer.vocab["<|START|>"]
-        unk_id = tokenizer._tokenizer.vocab["<unk>"]
-        role_start_id = tokenizer._tokenizer.vocab["<|role_start|>"]
-        role_end_id = tokenizer._tokenizer.vocab["<|role_end|>"]
-        think_start_id = tokenizer._tokenizer.vocab["<think>"]
-        think_end_id = tokenizer._tokenizer.vocab["</think>"]
-        nl_id = tokenizer._tokenizer.vocab["\n"]
-        nlnl_id = tokenizer._tokenizer.vocab["\n\n"]
-        system_id = tokenizer._tokenizer.encode("system")[0]
-        user_id = tokenizer._tokenizer.encode("user")[0]
-        assistant_id = tokenizer._tokenizer.encode("assistant")[0]
-
         loss_mask = []
         role_end, nl_check, keep_mask = True, False, False
         for token_id in target:
-            if token_id in [unk_id, start_id, IGNORE_INDEX]:
+            if token_id in [self.unk_id, self.start_id, IGNORE_INDEX]:
                 loss_mask.append(0.0)
-            elif token_id == role_start_id:
+            elif token_id == self.end_id:
+                loss_mask.append(1.0)
+            elif token_id == self.role_start_id:
                 loss_mask.append(0.0)
                 role_end = False
-            elif token_id == role_end_id:
+            elif token_id == self.role_end_id:
                 loss_mask.append(0.0)
                 role_end = True
                 nl_check = True
-            elif token_id == think_start_id:
+            elif token_id == self.think_start_id:
                 loss_mask.append(0.0)
                 nl_check = True
-            elif token_id == think_end_id:
+            elif token_id == self.think_end_id:
                 loss_mask.append(1.0)
                 nl_check = True
-            elif nl_check and token_id in [nl_id, nlnl_id]:
+            elif nl_check and token_id in [self.nl_id, self.nlnl_id]:
                 loss_mask.append(0.0)
                 nl_check = False
             elif not role_end:
                 loss_mask.append(0.0)
-                if token_id in [system_id, user_id]:
+                if token_id in [self.system_id, self.user_id]:
                     keep_mask = True
-                elif token_id == assistant_id:
+                elif token_id == self.assistant_id:
                     keep_mask = False
             elif keep_mask:
                 loss_mask.append(0.0)
             else:
                 loss_mask.append(1.0)
+
+        if sum(loss_mask) == 0.0:
+            loss_mask = [1.0 if t in [self.end_id, self.think_end_id] else 0.0 for t in target]
 
         # padding
         num_tokens = len(tokens) + 1
@@ -203,7 +209,10 @@ class SFTDataset(MegatronDataset):
         assert padding_len >= 0
         tokens.append(tokenizer.eod)
         target.append(tokenizer.eod)
-        loss_mask.append(0.0)
+        if sum(loss_mask) == 0.0:
+            loss_mask.append(1.0)
+        else:
+            loss_mask.append(0.0)
         filler = [tokenizer.pad] * (padding_len + 1)
         tokens.extend(filler)
         target.extend(filler)

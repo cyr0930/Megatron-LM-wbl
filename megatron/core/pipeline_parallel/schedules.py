@@ -984,6 +984,7 @@ def forward_backward_pipelining_with_interleaving(
         msg = (
             'The number of contiguous micro-batches in a virtual pipeline stage'
             f'should range in [PP={pipeline_parallel_size} , M={num_microbatches}]'
+            f', but got N={config.microbatch_group_size_per_vp_stage}.'
         )
         raise ValueError(msg)
 
