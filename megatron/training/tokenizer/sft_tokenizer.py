@@ -99,33 +99,24 @@ class SFTTokenizer(MegatronTokenizer):
         if not self._prompt_config.has_system_role and conversation[0]["role"] == "system":
             conversation = conversation[1:]
 
-        whole_tokens = self._tokenizer.apply_chat_template(
-            conversation,
-            tokenize=True,
-            add_generation_prompt=False,
-            return_assistant_token_mask=False,
-            return_tensors="np",
-            chat_template=self._prompt_config.custom_chat_template,
-            tools=tools
-        )[0]
-        if conversation[-1]["role"] == "assistant":
-            non_target_conversation = conversation[:-1]
-            non_target_tokens = self._tokenizer.apply_chat_template(
-                non_target_conversation,
-                tokenize=True,
-                add_generation_prompt=True,
-                return_assistant_token_mask=False,
-                return_tensors="np",
-                chat_template=self._prompt_config.custom_chat_template,
-                tools=tools
-            )[0]
-            non_target_len = len(non_target_tokens)
-            target_tokens = np.full_like(whole_tokens, fill_value=IGNORE_INDEX)
-            target_tokens[non_target_len:] = whole_tokens[non_target_len:]
-        else:
-            raise NotImplementedError("Data is not ended with assistant or tool role.")
+        whole_tokens = np.array([], dtype=np.int64)
+        buf = []
+        for utter in conversation:
+            buf.append(utter)
+            if utter["role"] == "assistant":
+                tokens = self._tokenizer.apply_chat_template(
+                    buf,
+                    tokenize=True,
+                    add_generation_prompt=False,
+                    return_assistant_token_mask=False,
+                    return_tensors="np",
+                    chat_template=self._prompt_config.custom_chat_template,
+                    tools=tools
+                )[0]
+                whole_tokens = np.concatenate((whole_tokens, tokens), axis=0)
+                buf = []
 
-        return whole_tokens, target_tokens
+        return whole_tokens, whole_tokens
 
     def tokenize(self, text: Union[str, List[Dict]]):
         """Tokenize conversation or string input."""
