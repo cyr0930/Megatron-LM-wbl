@@ -22,7 +22,7 @@ from vllm.distributed import (
 )
 from vllm.logger import init_logger
 from vllm.model_executor.layers.activation import SiluAndMul
-from vllm.model_executor.layers.fused_moe import FusedMoE
+from vllm.model_executor.layers.fused_moe import SharedFusedMoE
 from vllm.model_executor.layers.layernorm import GemmaRMSNorm as RMSNorm
 from vllm.model_executor.layers.linear import (
     ColumnParallelLinear,
@@ -33,7 +33,6 @@ from vllm.model_executor.layers.linear import (
 from vllm.model_executor.layers.logits_processor import LogitsProcessor
 from vllm.model_executor.layers.quantization import QuantizationConfig
 from vllm.model_executor.layers.rotary_embedding import RotaryEmbedding, DeepseekScalingRotaryEmbedding, _ROPE_DICT
-from vllm.model_executor.layers.shared_fused_moe import SharedFusedMoE
 from vllm.model_executor.layers.vocab_parallel_embedding import (
     ParallelLMHead,
     VocabParallelEmbedding,
@@ -55,6 +54,7 @@ from vllm.model_executor.models.interfaces import (
     SupportsLoRA,
     SupportsPP,
 )
+from vllm.model_executor.utils import maybe_disable_graph_partition
 from vllm.platforms import current_platform
 from vllm.sequence import IntermediateTensors
 from .configuration_wbl import WBLConfig
@@ -150,7 +150,7 @@ class WBLMoE(nn.Module):
             prefix=f"{prefix}.gate",
         )
 
-         # Load balancing settings.
+        # Load balancing settings.
         eplb_config = parallel_config.eplb_config
         self.enable_eplb = parallel_config.enable_eplb
 
@@ -193,6 +193,7 @@ class WBLMoE(nn.Module):
             num_redundant_experts=self.n_redundant_experts,
             is_sequence_parallel=self.is_sequence_parallel,
         )
+        self.experts.select_experts = select_experts    # monkeypatch select_experts to remove grouped_topk logic
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         num_tokens, hidden_dim = hidden_states.shape
@@ -207,15 +208,9 @@ class WBLMoE(nn.Module):
         router_logits, _ = self.gate(hidden_states)
         hidden_states = hidden_states.to(dtype_orig)
 
-        fused_moe_out = self.experts(
+        shared_output, final_hidden_states = self.experts(
             hidden_states=hidden_states, router_logits=router_logits
         )
-
-        if self.shared_experts is not None:
-            shared_output, final_hidden_states = fused_moe_out
-        else:
-            shared_output = None
-            final_hidden_states = fused_moe_out
 
         if self.shared_experts is not None:
             assert shared_output is not None
@@ -234,7 +229,11 @@ class WBLMoE(nn.Module):
         return final_hidden_states.view(num_tokens, hidden_dim)
 
 
-@torch.compile(dynamic=True, backend=current_platform.simple_compile_backend)
+@torch.compile(
+    dynamic=True,
+    backend=current_platform.simple_compile_backend,
+    options=maybe_disable_graph_partition(current_platform.simple_compile_backend),
+)
 def topk_func(
     hidden_states: torch.Tensor,
     gating_output: torch.Tensor,
@@ -282,6 +281,7 @@ def select_experts(
     global_num_experts: int | None = None,
     zero_expert_num: int | None = None,
     zero_expert_type: str | None = None,
+    num_fused_shared_experts: int = 0,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     topk_weights, topk_ids = topk_func(
         hidden_states=hidden_states,
@@ -307,9 +307,6 @@ def select_experts(
         )
     assert topk_ids.dtype == indices_type or indices_type is None
     return topk_weights, topk_ids, None
-
-
-FusedMoE.select_experts = select_experts    # monkeypatch select_experts to remove grouped_topk logic
 
 
 def apply_rotary_emb(
@@ -649,6 +646,7 @@ class WBLDecoderLayer(nn.Module):
 
         self.hidden_size = config.hidden_size
         max_position_embeddings = getattr(config, "max_position_embeddings", 8192)
+        moe_layer_freq = getattr(config, "moe_layer_freq", 1)
 
         # verify MLA attention specific fields
         qk_nope_head_dim = getattr(config, "qk_nope_head_dim", 0)
@@ -678,6 +676,7 @@ class WBLDecoderLayer(nn.Module):
         if (
             config.n_routed_experts is not None
             and layer_idx >= config.first_k_dense_replace
+            and layer_idx % moe_layer_freq == 0
         ):
             self.mlp = WBLMoE(
                 config=config,
@@ -750,7 +749,6 @@ class WBLModel(nn.Module):
             )
         else:
             self.embed_tokens = PPMissingLayer()
-
         self.start_layer, self.end_layer, self.layers = make_layers(
             config.num_hidden_layers,
             lambda prefix: WBLDecoderLayer(vllm_config, prefix),
@@ -908,22 +906,6 @@ class WBLForCausalLM(
 
         self.extract_moe_parameters(example_moe)
 
-    def set_eplb_state(
-        self,
-        expert_load_view: torch.Tensor,
-        logical_to_physical_map: torch.Tensor,
-        logical_replica_count: torch.Tensor,
-    ) -> None:
-        for layer_idx, layer in enumerate(self.moe_layers):
-            # Register the expert weights.
-            self.expert_weights.append(layer.get_expert_weights())
-            layer.set_eplb_state(
-                moe_layer_idx=layer_idx,
-                expert_load_view=expert_load_view,
-                logical_to_physical_map=logical_to_physical_map,
-                logical_replica_count=logical_replica_count,
-            )
-
     def embed_input_ids(self, input_ids: torch.Tensor) -> torch.Tensor:
         return self.model.embed_input_ids(input_ids)
 
@@ -951,7 +933,7 @@ class WBLForCausalLM(
     def get_expert_mapping(self) -> list[tuple[str, str, int, str]]:
         # Params for weights, fp8 weight scales, fp8 activation scales
         # (param_name, weight_name, expert_id, shard_id)
-        return FusedMoE.make_expert_params_mapping(
+        return SharedFusedMoE.make_expert_params_mapping(
             ckpt_gate_proj_name="gate_proj",
             ckpt_down_proj_name="down_proj",
             ckpt_up_proj_name="up_proj",
@@ -970,7 +952,7 @@ class WBLForCausalLM(
 
         # Params for weights, fp8 weight scales, fp8 activation scales
         # (param_name, weight_name, expert_id, shard_id)
-        expert_params_mapping = FusedMoE.make_expert_params_mapping(
+        expert_params_mapping = SharedFusedMoE.make_expert_params_mapping(
             ckpt_gate_proj_name="gate_proj",
             ckpt_down_proj_name="down_proj",
             ckpt_up_proj_name="up_proj",
