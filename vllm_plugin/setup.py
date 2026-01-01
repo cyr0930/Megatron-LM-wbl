@@ -1,14 +1,14 @@
 import shutil
 from setuptools import setup
 
-shutil.copy("../bridge/configuration_Vaetki.py", "./Vaetki/")
+shutil.copy("../bridge/configuration_vaetki.py", "./vaetki/")
 setup(
-    name='Vaetki',
+    name='vaetki',
     version='1.2.0',
-    packages=['Vaetki'],
+    packages=['vaetki'],
     entry_points={
         'vllm.general_plugins': [
-            "Vaetki_model = Vaetki:register",
+            "vaetki_model = vaetki:register",
         ],
     },
 )
