@@ -9,8 +9,8 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 def copy_codes(save_directory):
     os.makedirs(save_directory, exist_ok=True)
-    shutil.copy("./bridge/configuration_wbl.py", f"{save_directory}/")
-    shutil.copy("./bridge/modeling_wbl.py", f"{save_directory}/")
+    shutil.copy("./bridge/configuration_vaetki.py", f"{save_directory}/")
+    shutil.copy("./bridge/modeling_vaetki.py", f"{save_directory}/")
 
 
 if __name__ == "__main__":
