@@ -56,7 +56,7 @@ if __name__ == "__main__":
         dtype=torch.bfloat16,
         device_map="auto",
         trust_remote_code=True,
-        attn_implementation="flash_attention_3",
+        attn_implementation="flash_attention_2",
     )
     inputs = tokenizer(prompts, padding=True, return_tensors="pt")["input_ids"].to(model.device)
     start = time.time()
