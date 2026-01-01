@@ -96,6 +96,10 @@ class SFTTokenizer(MegatronTokenizer):
             add_generation_prompt (bool): Add assistant prefix to the end.
         """
         # Skip system message if the tokenizer doesn't have a system role.
+        for utter in conversation:
+            if "role" not in utter:
+                utter["role"] = utter["from"]
+
         if not self._prompt_config.has_system_role and conversation[0]["role"] == "system":
             conversation = conversation[1:]
 
