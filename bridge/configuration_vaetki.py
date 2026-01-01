@@ -2,8 +2,8 @@ from transformers.configuration_utils import PretrainedConfig
 from transformers.modeling_rope_utils import rope_config_validation
 
 
-class WBLConfig(PretrainedConfig):
-    model_type = "wbl"
+class VaetkiConfig(PretrainedConfig):
+    model_type = "vaetki"
     keys_to_ignore_at_inference = ["past_key_values"]
     base_model_tp_plan = {  # TODO: only replicate attention layers when > first_k_dense_replace
         "layers.*.mlp.experts.*.gate_proj": "local_colwise",

@@ -17,7 +17,7 @@ from megatron.bridge import AutoBridge
 from megatron.bridge.training.model_load_save import load_model_config, temporary_distributed_context
 from megatron.bridge.training.checkpointing import _load_model_weights_from_checkpoint
 from pretrain_gpt_for_wbl import model_provider_with_args
-from .wbl_bridge import WBLBridge   # register bridge
+from .vaetki_bridge import VaetkiBridge    # register bridge
 
 DIR_SETTINGS = "settings"
 DIR_HF = "hf"
@@ -26,12 +26,12 @@ DIR_HF = "hf"
 def _create_hf_config(model, tokenizer, save_directory):
     config = {
         "auto_map": {
-            "AutoConfig": "configuration_wbl.WBLConfig",
-            "AutoModel": "modeling_wbl.WBLModel",
-            "AutoModelForCausalLM": "modeling_wbl.WBLForCausalLM"
+            "AutoConfig": "configuration_vaetki.VaetkiConfig",
+            "AutoModel": "modeling_vaetki.VaetkiModel",
+            "AutoModelForCausalLM": "modeling_vaetki.VaetkiForCausalLM"
         },
-        "architectures": ["WBLForCausalLM"],
-        "model_type": "wbl",
+        "architectures": ["VaetkiForCausalLM"],
+        "model_type": "vaetki",
         "hidden_act": "silu",
         "attention_bias": False,
         "attention_dropout": model.config.attention_dropout,
@@ -64,7 +64,7 @@ def _create_hf_config(model, tokenizer, save_directory):
         },
         "rope_theta_global": float(model.config.rotary_base_global),
         "rope_theta_local": float(model.config.rotary_base),
-        "max_position_embeddings": model.max_position_embeddings,
+        "max_position_embeddings": 131072,
         "tie_word_embeddings": model.share_embeddings_and_output_weights,
         "vocab_size": model.vocab_size,
         "bos_token_id": tokenizer.bos_token_id,
@@ -77,8 +77,8 @@ def _create_hf_config(model, tokenizer, save_directory):
 
 
 def _copy_codes(save_directory):
-    shutil.copy("./bridge/configuration_wbl.py", f"{save_directory}/")
-    shutil.copy("./bridge/modeling_wbl.py", f"{save_directory}/")
+    shutil.copy("./bridge/configuration_vaetki.py", f"{save_directory}/")
+    shutil.copy("./bridge/modeling_vaetki.py", f"{save_directory}/")
 
 
 def _copy_tokenizer_files(tokenizer_path, save_directory):

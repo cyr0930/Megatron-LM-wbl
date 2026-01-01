@@ -17,10 +17,10 @@ from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS
 from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS, PreTrainedModel
 from transformers.processing_utils import Unpack
 from transformers.utils import TransformersKwargs, can_return_tuple
-from .configuration_wbl import WBLConfig
+from .configuration_vaetki import VaetkiConfig
 
 
-class WBLRMSNorm(nn.Module):
+class VaetkiRMSNorm(nn.Module):
     def __init__(self, hidden_size, eps=1e-6):
         super().__init__()
         self.weight = nn.Parameter(torch.zeros(hidden_size))
@@ -37,8 +37,8 @@ class WBLRMSNorm(nn.Module):
         return f"{tuple(self.weight.shape)}, eps={self.variance_epsilon}"
 
 
-class WBLRotaryEmbedding(nn.Module):
-    def __init__(self, config: WBLConfig, rope_type="default", original_max_position_embeddings=None, device=None):
+class VaetkiRotaryEmbedding(nn.Module):
+    def __init__(self, config: VaetkiConfig, rope_type="default", original_max_position_embeddings=None, device=None):
         super().__init__()
         self.rope_type = rope_type
         self.max_seq_len_cached = config.max_position_embeddings
@@ -65,7 +65,7 @@ class WBLRotaryEmbedding(nn.Module):
         return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
 
 
-class WBLMLP(nn.Module):
+class VaetkiMLP(nn.Module):
     def __init__(self, config, hidden_size=None, intermediate_size=None):
         super().__init__()
         self.config = config
@@ -82,7 +82,7 @@ class WBLMLP(nn.Module):
         return down_proj
 
 
-class WBLTopkRouter(nn.Module):
+class VaetkiTopkRouter(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
@@ -112,19 +112,19 @@ class WBLTopkRouter(nn.Module):
         return topk_indices, topk_weights
 
 
-class WBLMoE(nn.Module):
+class VaetkiMoE(nn.Module):
 
     def __init__(self, config):
         super().__init__()
         self.config = config
         self.experts = nn.ModuleList(
             [
-                WBLMLP(config, intermediate_size=config.moe_intermediate_size)
+                VaetkiMLP(config, intermediate_size=config.moe_intermediate_size)
                 for _ in range(config.n_routed_experts)
             ]
         )
-        self.gate = WBLTopkRouter(config)
-        self.shared_experts = WBLMLP(
+        self.gate = VaetkiTopkRouter(config)
+        self.shared_experts = VaetkiMLP(
             config=config, intermediate_size=config.moe_intermediate_size * config.n_shared_experts
         )
 
@@ -207,9 +207,9 @@ def yarn_get_mscale(scale=1, mscale=1):
     return 0.1 * mscale * math.log(scale) + 1.0
 
 
-class WBLAttention(nn.Module):
+class VaetkiAttention(nn.Module):
 
-    def __init__(self, config: WBLConfig, layer_idx: int):
+    def __init__(self, config: VaetkiConfig, layer_idx: int):
         super().__init__()
         self.is_sliding = config.layer_types[layer_idx] == "sliding_attention"
         self.config = config
@@ -229,7 +229,7 @@ class WBLAttention(nn.Module):
             self.q_proj = nn.Linear(config.hidden_size, self.num_heads * self.qk_head_dim, bias=False)
         else:
             self.q_a_proj = nn.Linear(config.hidden_size, config.q_lora_rank, bias=config.attention_bias)
-            self.q_a_layernorm = WBLRMSNorm(config.q_lora_rank, eps=config.rms_norm_eps)
+            self.q_a_layernorm = VaetkiRMSNorm(config.q_lora_rank, eps=config.rms_norm_eps)
             self.q_b_proj = nn.Linear(config.q_lora_rank, self.num_heads * self.qk_head_dim, bias=False)
 
         self.kv_a_proj_with_mqa = nn.Linear(
@@ -237,7 +237,7 @@ class WBLAttention(nn.Module):
             self.kv_lora_rank + self.qk_rope_head_dim,
             bias=config.attention_bias,
         )
-        self.kv_a_layernorm = WBLRMSNorm(self.kv_lora_rank, eps=config.rms_norm_eps)
+        self.kv_a_layernorm = VaetkiRMSNorm(self.kv_lora_rank, eps=config.rms_norm_eps)
         self.kv_b_proj = nn.Linear(
             self.kv_lora_rank,
             self.num_heads * (self.qk_nope_head_dim + self.v_head_dim),
@@ -328,22 +328,22 @@ class WBLAttention(nn.Module):
         return attn_output, attn_weights
 
 
-class WBLDecoderLayer(GradientCheckpointingLayer):
-    def __init__(self, config: WBLConfig, layer_idx: int):
+class VaetkiDecoderLayer(GradientCheckpointingLayer):
+    def __init__(self, config: VaetkiConfig, layer_idx: int):
         super().__init__()
         self.hidden_size = config.hidden_size
         self.attention_type = config.layer_types[layer_idx]
-        self.self_attn = WBLAttention(config=config, layer_idx=layer_idx)
+        self.self_attn = VaetkiAttention(config=config, layer_idx=layer_idx)
 
         if layer_idx >= config.first_k_dense_replace:
-            self.mlp = WBLMoE(config)
+            self.mlp = VaetkiMoE(config)
         else:
-            self.mlp = WBLMLP(config)
+            self.mlp = VaetkiMLP(config)
 
-        self.input_layernorm = WBLRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.post_attention_layernorm = WBLRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.pre_mlp_layernorm = WBLRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.post_mlp_layernorm = WBLRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.input_layernorm = VaetkiRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.post_attention_layernorm = VaetkiRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.pre_mlp_layernorm = VaetkiRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.post_mlp_layernorm = VaetkiRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
     def forward(
         self,
@@ -395,11 +395,11 @@ class WBLDecoderLayer(GradientCheckpointingLayer):
         return outputs
 
 
-class WBLPreTrainedModel(PreTrainedModel):
-    config_class = WBLConfig
+class VaetkiPreTrainedModel(PreTrainedModel):
+    config_class = VaetkiConfig
     base_model_prefix = "model"
     supports_gradient_checkpointing = True
-    _no_split_modules = ["WBLDecoderLayer"]
+    _no_split_modules = ["VaetkiDecoderLayer"]
     _skip_keys_device_placement = ["past_key_values"]
     _supports_flash_attn = True
     _supports_sdpa = False
@@ -419,27 +419,27 @@ class WBLPreTrainedModel(PreTrainedModel):
             module.weight.data.normal_(mean=0.0, std=std)
             if module.padding_idx is not None:
                 module.weight.data[module.padding_idx].zero_()
-        elif isinstance(module, WBLRMSNorm):
+        elif isinstance(module, VaetkiRMSNorm):
             module.weight.data.fill_(1.0)
-        elif isinstance(module, WBLTopkRouter):
+        elif isinstance(module, VaetkiTopkRouter):
             module.weight.data.normal_(mean=0.0, std=std)
 
 
-class WBLModel(WBLPreTrainedModel):
+class VaetkiModel(VaetkiPreTrainedModel):
 
-    def __init__(self, config: WBLConfig):
+    def __init__(self, config: VaetkiConfig):
         super().__init__(config)
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
 
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
         self.layers = nn.ModuleList(
-            [WBLDecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
+            [VaetkiDecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
         )
-        self.norm = WBLRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.norm = VaetkiRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.gradient_checkpointing = False
         
-        self.rotary_emb_local = WBLRotaryEmbedding(config=config)
+        self.rotary_emb_local = VaetkiRotaryEmbedding(config=config)
 
         config = copy.deepcopy(config)
         config.rope_theta = config.rope_theta_global
@@ -449,7 +449,7 @@ class WBLModel(WBLPreTrainedModel):
         else:
             rope_type = config.rope_scaling["rope_type"]
             original_max_position_embeddings = config.rope_scaling["original_max_position_embeddings"]
-        self.rotary_emb_global = WBLRotaryEmbedding(config=config, rope_type=rope_type, original_max_position_embeddings=original_max_position_embeddings)
+        self.rotary_emb_global = VaetkiRotaryEmbedding(config=config, rope_type=rope_type, original_max_position_embeddings=original_max_position_embeddings)
         if rope_type == "default":
             self.rotary_emb_global.inv_freq /= 8.0
 
@@ -562,14 +562,14 @@ class WBLModel(WBLPreTrainedModel):
         )
 
 
-class WBLForCausalLM(WBLPreTrainedModel, GenerationMixin):
+class VaetkiForCausalLM(VaetkiPreTrainedModel, GenerationMixin):
     _tied_weights_keys = ["lm_head.weight"]
     _tp_plan = {"lm_head": "colwise_rep"}
     _pp_plan = {"lm_head": (["hidden_states"], ["logits"])}
 
     def __init__(self, config):
         super().__init__(config)
-        self.model = WBLModel(config)
+        self.model = VaetkiModel(config)
         self.vocab_size = config.vocab_size
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False, dtype=torch.float32)
 

@@ -57,7 +57,7 @@ from vllm.model_executor.models.interfaces import (
 from vllm.model_executor.utils import maybe_disable_graph_partition
 from vllm.platforms import current_platform
 from vllm.sequence import IntermediateTensors
-from .configuration_wbl import WBLConfig
+from .configuration_vaetki import VaetkiConfig
 
 if current_platform.is_cuda_alike():
     from vllm.model_executor.layers.fused_moe.fused_moe import eplb_map_to_physical_and_record
@@ -65,7 +65,7 @@ if current_platform.is_cuda_alike():
 logger = init_logger(__name__)
 
 
-class WBLMLP(nn.Module):
+class VaetkiMLP(nn.Module):
     def __init__(
         self,
         hidden_size: int,
@@ -112,10 +112,10 @@ class WBLMLP(nn.Module):
         return x
 
 
-class WBLMoE(nn.Module):
+class VaetkiMoE(nn.Module):
     def __init__(
         self,
-        config: WBLConfig,
+        config: VaetkiConfig,
         parallel_config: ParallelConfig,
         quant_config: QuantizationConfig | None = None,
         prefix: str = "",
@@ -165,7 +165,7 @@ class WBLMoE(nn.Module):
         )
 
         intermediate_size = config.moe_intermediate_size * config.n_shared_experts
-        self.shared_experts = WBLMLP(
+        self.shared_experts = VaetkiMLP(
             hidden_size=config.hidden_size,
             intermediate_size=intermediate_size,
             hidden_act=config.hidden_act,
@@ -323,7 +323,7 @@ def apply_rotary_emb(
     return torch.cat((o1, o2), dim=-1)
 
 
-class WBLRope(RotaryEmbedding):
+class VaetkiRope(RotaryEmbedding):
     def __init__(
         self,
         head_size: int,
@@ -365,7 +365,7 @@ class WBLRope(RotaryEmbedding):
         return query, key
 
 
-class WBLYarn(DeepseekScalingRotaryEmbedding):
+class VaetkiYarn(DeepseekScalingRotaryEmbedding):
     def forward(
         self,
         positions: torch.Tensor,
@@ -425,7 +425,7 @@ def get_rope(
         return _ROPE_DICT[key]
 
     if not rope_scaling:
-        rotary_emb = WBLRope(
+        rotary_emb = VaetkiRope(
             head_size, rotary_dim, max_position, base, scale_inv_freq, dtype
         )
     else:
@@ -446,7 +446,7 @@ def get_rope(
                     "mscale_all_dim",
                 )
             }
-            rotary_emb = WBLYarn(
+            rotary_emb = VaetkiYarn(
                 head_size,
                 rotary_dim,
                 original_max_position,
@@ -462,11 +462,11 @@ def get_rope(
     return rotary_emb
 
 
-class WBLAttention(nn.Module):
+class VaetkiAttention(nn.Module):
     def __init__(
         self,
         vllm_config: VllmConfig,
-        config: WBLConfig,
+        config: VaetkiConfig,
         hidden_size: int,
         num_heads: int,
         qk_nope_head_dim: int,
@@ -614,12 +614,12 @@ class WBLAttention(nn.Module):
         return output
 
 
-class WBLDecoderLayer(nn.Module):
+class VaetkiDecoderLayer(nn.Module):
     def __init__(
         self,
         vllm_config: VllmConfig,
         prefix: str,
-        config: WBLConfig | None = None,
+        config: VaetkiConfig | None = None,
     ) -> None:
         super().__init__()
 
@@ -654,7 +654,7 @@ class WBLDecoderLayer(nn.Module):
         v_head_dim = getattr(config, "v_head_dim", 0)
         kv_lora_rank = getattr(config, "kv_lora_rank", 0)
 
-        self.self_attn = WBLAttention(
+        self.self_attn = VaetkiAttention(
             vllm_config=vllm_config,
             config=config,
             hidden_size=self.hidden_size,
@@ -678,14 +678,14 @@ class WBLDecoderLayer(nn.Module):
             and layer_idx >= config.first_k_dense_replace
             and layer_idx % moe_layer_freq == 0
         ):
-            self.mlp = WBLMoE(
+            self.mlp = VaetkiMoE(
                 config=config,
                 parallel_config=parallel_config,
                 quant_config=quant_config,
                 prefix=f"{prefix}.mlp",
             )
         else:
-            self.mlp = WBLMLP(
+            self.mlp = VaetkiMLP(
                 hidden_size=config.hidden_size,
                 intermediate_size=config.intermediate_size,
                 hidden_act=config.hidden_act,
@@ -727,7 +727,7 @@ class WBLDecoderLayer(nn.Module):
 
 
 @support_torch_compile
-class WBLModel(nn.Module):
+class VaetkiModel(nn.Module):
     fall_back_to_pt_during_load = False
 
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):
@@ -751,7 +751,7 @@ class WBLModel(nn.Module):
             self.embed_tokens = PPMissingLayer()
         self.start_layer, self.end_layer, self.layers = make_layers(
             config.num_hidden_layers,
-            lambda prefix: WBLDecoderLayer(vllm_config, prefix),
+            lambda prefix: VaetkiDecoderLayer(vllm_config, prefix),
             prefix=f"{prefix}.layers",
         )
 
@@ -796,13 +796,13 @@ class WBLModel(nn.Module):
         return hidden_states
 
 
-class WBLMixtureOfExperts(MixtureOfExperts):
-    moe_mlp_layers: list[WBLMoE]
+class VaetkiMixtureOfExperts(MixtureOfExperts):
+    moe_mlp_layers: list[VaetkiMoE]
     """
     List of MoE MLP layers in the model.
     """
 
-    def extract_moe_parameters(self, example_moe: WBLMoE | None):
+    def extract_moe_parameters(self, example_moe: VaetkiMoE | None):
         if example_moe is None:
             self.num_moe_layers = 0
             self.num_expert_groups = 0
@@ -837,8 +837,8 @@ class WBLMixtureOfExperts(MixtureOfExperts):
             moe.experts.update_expert_map()
 
 
-class WBLForCausalLM(
-    nn.Module, SupportsPP, WBLMixtureOfExperts, SupportsLoRA
+class VaetkiForCausalLM(
+    nn.Module, SupportsPP, VaetkiMixtureOfExperts, SupportsLoRA
 ):
     packed_modules_mapping = {
         "gate_up_proj": ["gate_proj", "up_proj"],
@@ -861,7 +861,7 @@ class WBLForCausalLM(
                 "kv_a_proj_with_mqa",
             ]
 
-        self.model = WBLModel(
+        self.model = VaetkiModel(
             vllm_config=vllm_config, prefix=maybe_prefix(prefix, "model")
         )
         if get_pp_group().is_last_rank:
@@ -897,8 +897,8 @@ class WBLForCausalLM(
             if isinstance(layer, PPMissingLayer):
                 continue
 
-            assert isinstance(layer, WBLDecoderLayer)
-            if isinstance(layer.mlp, WBLMoE):
+            assert isinstance(layer, VaetkiDecoderLayer)
+            if isinstance(layer.mlp, VaetkiMoE):
                 # Pick last one layer since the first ones may be dense layers.
                 example_moe = layer.mlp
                 self.moe_mlp_layers.append(layer.mlp)

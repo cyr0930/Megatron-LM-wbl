@@ -9,8 +9,8 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 def copy_codes(save_directory):
     os.makedirs(save_directory, exist_ok=True)
-    shutil.copy("./bridge/configuration_wbl.py", f"{save_directory}/")
-    shutil.copy("./bridge/modeling_wbl.py", f"{save_directory}/")
+    shutil.copy("./bridge/configuration_vaetki.py", f"{save_directory}/")
+    shutil.copy("./bridge/modeling_vaetki.py", f"{save_directory}/")
 
 
 if __name__ == "__main__":
@@ -56,7 +56,7 @@ if __name__ == "__main__":
         dtype=torch.bfloat16,
         device_map="auto",
         trust_remote_code=True,
-        attn_implementation="flash_attention_3",
+        attn_implementation="flash_attention_2",
     )
     inputs = tokenizer(prompts, padding=True, return_tensors="pt")["input_ids"].to(model.device)
     start = time.time()

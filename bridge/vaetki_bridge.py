@@ -87,8 +87,8 @@ def get_mapping_list() -> list:
     return mapping_list
 
 
-@MegatronModelBridge.register_bridge(source="WBLForCausalLM", target=GPTModel)
-class WBLBridge(MegatronModelBridge):
+@MegatronModelBridge.register_bridge(source="VaetkiForCausalLM", target=GPTModel)
+class VaetkiBridge(MegatronModelBridge):
 
     def mapping_registry(self) -> MegatronMappingRegistry:
         mapping_list = get_mapping_list()
