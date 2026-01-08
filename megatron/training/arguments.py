@@ -2374,6 +2374,8 @@ def _add_distributed_args(parser):
     group.add_argument('--overlap-p2p-communication-warmup-flush', action='store_true',
                        default=False, help='if set, overlap pipeline parallel communication in warmup and flush',
                        dest='overlap_p2p_comm_warmup_flush')
+    group.add_argument('--no-batch-p2p-sync', action='store_false',
+                       dest='batch_p2p_sync')
     group.add_argument('--distributed-backend', default='nccl',
                        choices=['nccl', 'gloo'],
                        help='Which backend to use for distributed training.')
