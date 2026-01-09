@@ -16,4 +16,3 @@ onelogger.err
 runs/
 /test_cases/
 **/dist/
-vllm_plugin/vaetki/configuration_vaetki.py
