@@ -57,7 +57,6 @@ from vllm.model_executor.models.interfaces import (
 from vllm.model_executor.utils import maybe_disable_graph_partition
 from vllm.platforms import current_platform
 from vllm.sequence import IntermediateTensors
-from .configuration_vaetki import VaetkiConfig
 
 if current_platform.is_cuda_alike():
     from vllm.model_executor.layers.fused_moe.fused_moe import eplb_map_to_physical_and_record
@@ -115,7 +114,7 @@ class VaetkiMLP(nn.Module):
 class VaetkiMoE(nn.Module):
     def __init__(
         self,
-        config: VaetkiConfig,
+        config,
         parallel_config: ParallelConfig,
         quant_config: QuantizationConfig | None = None,
         prefix: str = "",
@@ -466,7 +465,7 @@ class VaetkiAttention(nn.Module):
     def __init__(
         self,
         vllm_config: VllmConfig,
-        config: VaetkiConfig,
+        config,
         hidden_size: int,
         num_heads: int,
         qk_nope_head_dim: int,
@@ -619,7 +618,7 @@ class VaetkiDecoderLayer(nn.Module):
         self,
         vllm_config: VllmConfig,
         prefix: str,
-        config: VaetkiConfig | None = None,
+        config=None,
     ) -> None:
         super().__init__()
 
